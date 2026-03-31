@@ -17,7 +17,9 @@ const OrderPopup = ({ order, onAccept, onDismiss }) => {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            padding: '24px'
+            padding: '24px',
+            // Allow interactions with the UI underneath when user clicks outside the popup card.
+            pointerEvents: 'none'
         }}>
             <div className="order-popup glass animate-fade" style={{
                 width: '100%',
@@ -27,7 +29,9 @@ const OrderPopup = ({ order, onAccept, onDismiss }) => {
                 overflow: 'hidden',
                 display: 'flex',
                 flexDirection: 'column',
-                boxShadow: '0 24px 48px rgba(0,0,0,0.5), 0 0 0 1px var(--border-subtle)'
+                boxShadow: '0 24px 48px rgba(0,0,0,0.5), 0 0 0 1px var(--border-subtle)',
+                // Keep buttons inside the popup clickable.
+                pointerEvents: 'auto'
             }}>
                 <div style={{
                     padding: '24px 32px',
@@ -73,14 +77,14 @@ const OrderPopup = ({ order, onAccept, onDismiss }) => {
                                 backgroundColor: 'var(--bg-surface)'
                             }}>
                                 <span style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                                    <span style={{ 
-                                        color: 'var(--bg-dark)', 
+                                    <span style={{
+                                        color: 'var(--bg-dark)',
                                         backgroundColor: 'var(--accent-white)',
-                                        width: '24px', 
-                                        height: '24px', 
-                                        borderRadius: '6px', 
-                                        display: 'flex', 
-                                        alignItems: 'center', 
+                                        width: '24px',
+                                        height: '24px',
+                                        borderRadius: '6px',
+                                        display: 'flex',
+                                        alignItems: 'center',
                                         justifyContent: 'center',
                                         fontSize: '0.8rem',
                                         fontWeight: '700'

@@ -37,17 +37,17 @@ const AdminPage = () => {
     const [payPhone, setPayPhone] = useState('');
     const [payName, setPayName] = useState('');
     const [payExists, setPayExists] = useState(false);
-    
+
     // Security Utility: Sanitize inputs to prevent XSS
     const sanitize = (str) => {
         if (typeof str !== 'string') return str;
         return str.replace(/[<>]/g, '').trim();
     };
-    
+
     // Recipe Modal State
     const [newMatId, setNewMatId] = useState('');
     const [newMatQty, setNewMatQty] = useState('');
-    
+
     const detectedIp = "10.18.40.43";
 
     // --- Inventory State (Lifted) ---
@@ -136,7 +136,7 @@ const AdminPage = () => {
     const fetchInitialData = async () => {
         setLoading(true);
         await Promise.all([fetchTables(), fetchOrders(), fetchMenuItems(), fetchCategories(), fetchCustomers()]);
-        
+
         // Auto-seed required drinks if missing
         const requiredDrinks = [
             { name: 'Water Bottle', price: 20, category: 'cold', emoji: '💧', description: 'Chilled mineral water', is_veg: true },
@@ -149,7 +149,7 @@ const AdminPage = () => {
                 await supabase.from('menu_items').insert(drink);
             }
         }
-        
+
         await fetchMenuItems(); // Refresh after seeding
         setLoading(false);
     };
@@ -193,8 +193,8 @@ const AdminPage = () => {
 
     // --- Automated Stock Deduction ---
     useEffect(() => {
-        const ordersToDeduct = orders.filter(o => 
-            (o.status === 'preparing' || o.status === 'ready' || o.status === 'paid') && 
+        const ordersToDeduct = orders.filter(o =>
+            (o.status === 'preparing' || o.status === 'ready' || o.status === 'paid') &&
             !deductedOrders.includes(o.id)
         );
 
@@ -280,15 +280,16 @@ const AdminPage = () => {
     const placeManualOrder = async (tableId, items) => {
         try {
             let orderToUpdate = null;
-            
+
             // Only merge for actual tables (not takeaway ID 0)
             if (tableId > 0) {
                 const { data } = await supabase
                     .from('orders')
                     .select('*')
                     .eq('table_id', tableId)
-                    .neq('status', 'paid');
-                
+                    .neq('status', 'paid')
+                    .neq('status', 'rejected');
+
                 if (data && data.length > 0) {
                     orderToUpdate = data[0]; // Take the first active order for this table
                 }
@@ -304,7 +305,7 @@ const AdminPage = () => {
                     else updatedItems.push({ ...newItem, isNew: false, qty: newItem.qty });
                 });
                 const newTotal = orderToUpdate.total + items.reduce((acc, curr) => acc + (curr.price * curr.qty), 0);
-                
+
                 await supabase.from('orders').update({
                     items: updatedItems,
                     total: newTotal,
@@ -328,11 +329,11 @@ const AdminPage = () => {
 
                 await supabase.from('orders').insert(orderData);
             }
-            
+
             if (tableId > 0) {
                 await supabase.from('tables').update({ is_free: false }).eq('id', tableId);
             }
-            
+
             fetchInitialData();
             setShowManualOrder(null);
             setManualCart([]);
@@ -376,13 +377,46 @@ const AdminPage = () => {
 
     const rejectOrder = async (orderId) => {
         try {
+            const targetOrder = orders.find(o => o.id === orderId);
+            let targetTableId = targetOrder?.table_id;
+
+            // Fallback: if local state doesn't have the order yet, fetch table_id from DB.
+            if (!targetTableId) {
+                const { data: orderRow, error: orderRowError } = await supabase
+                    .from('orders')
+                    .select('table_id')
+                    .eq('id', orderId)
+                    .maybeSingle();
+
+                if (orderRowError) throw orderRowError;
+                targetTableId = orderRow?.table_id;
+            }
+
             const { error: orderError } = await supabase
                 .from('orders')
                 .update({ status: 'rejected' })
                 .eq('id', orderId);
 
             if (orderError) throw orderError;
-            
+
+            // Free the table if it's a real table (not takeaway ID 0)
+            if (targetTableId && targetTableId > 0) {
+                const { error: tableError } = await supabase
+                    .from('tables')
+                    .update({ is_free: true })
+                    .eq('id', targetTableId);
+
+                if (tableError) throw tableError;
+
+                // Update local state immediately so the floor view refreshes fast.
+                setTables(prev => prev.map(t =>
+                    t.id === targetTableId ? { ...t, is_free: true } : t
+                ));
+
+                // If the operator currently has this order open, close it.
+                if (selectedTableOrder?.id === orderId) setSelectedTableOrder(null);
+            }
+
             setNewOrder(null);
             fetchOrders();
         } catch (err) {
@@ -399,7 +433,7 @@ const AdminPage = () => {
             const clearedItems = targetOrder.items.map(i => ({ ...i, isNew: false }));
 
             setTables(prev => prev.map(t => t.id === tableId ? { ...t, is_free: false } : t));
-            
+
             if (selectedTableOrder && selectedTableOrder.id === orderId) {
                 setSelectedTableOrder(prev => ({ ...prev, status: 'preparing', items: clearedItems }));
             }
@@ -408,7 +442,7 @@ const AdminPage = () => {
 
             const { data: updatedOrder, error: orderError } = await supabase
                 .from('orders')
-                .update({ 
+                .update({
                     status: 'preparing',
                     items: clearedItems
                 })
@@ -431,18 +465,18 @@ const AdminPage = () => {
         }
     };
 
-    const handleUpdateItemQty = async (orderId, itemName, delta) => {
+    const handleUpdateItemQty = async (orderId, itemName, delta, isParcel) => {
         try {
             const order = orders.find(o => o.id === orderId);
             if (!order) return;
 
             let newItems = [...order.items];
             const itemIdx = newItems.findIndex(i => i.name === itemName && !!i.isParcel === !!isParcel && i.type !== 'METADATA');
-            
+
             if (itemIdx === -1) return;
 
             const updatedQty = newItems[itemIdx].qty + delta;
-            
+
             if (updatedQty <= 0) {
                 // Remove item
                 newItems.splice(itemIdx, 1);
@@ -480,13 +514,13 @@ const AdminPage = () => {
             if (payPhone && payName) {
                 const { error: custError } = await supabase
                     .from('customers')
-                    .upsert({ 
-                        name: payName, 
-                        phone_number: payPhone 
+                    .upsert({
+                        name: payName,
+                        phone_number: payPhone
                     }, { onConflict: 'phone_number' });
-                
+
                 if (custError) console.error('Error saving customer during payment:', custError);
-                
+
                 // Clear state
                 setPayPhone('');
                 setPayName('');
@@ -510,9 +544,9 @@ const AdminPage = () => {
                     const { data: orderToFix } = await supabase.from('orders').select('items').eq('table_id', tableId).neq('status', 'paid').maybeSingle();
                     if (orderToFix) {
                         const fixedItems = [...orderToFix.items, { type: 'PAYMENT_METADATA', method: paymentMethod || 'Cash' }];
-                        await supabase.from('orders').update({ 
-                            status: 'paid', 
-                            items: fixedItems 
+                        await supabase.from('orders').update({
+                            status: 'paid',
+                            items: fixedItems
                         }).eq('table_id', tableId).neq('status', 'paid');
                     }
                 } else {
@@ -536,7 +570,7 @@ const AdminPage = () => {
             const { error } = await supabase.from('orders')
                 .update({ status: 'paid' })
                 .eq('id', orderId);
-            
+
             if (error) throw error;
             setOrders(prev => prev.filter(o => o.id !== orderId));
             alert('Parcel Handed Over Successfully!');
@@ -553,7 +587,7 @@ const AdminPage = () => {
 
             const existingMeta = order.items.find(i => i.type === 'PAYMENT_METADATA');
             let newItems = [...order.items];
-            
+
             if (existingMeta) {
                 newItems = newItems.map(i => i.type === 'PAYMENT_METADATA' ? { ...i, method } : i);
             } else {
@@ -573,22 +607,28 @@ const AdminPage = () => {
     };
 
     const handleTableClick = (table) => {
-        const tableOrder = orders.find(o => o.table_id === table.id && o.status !== 'paid');
+        const tableOrder = orders.find(o =>
+            o.table_id === table.id && o.status !== 'paid' && o.status !== 'rejected'
+        );
         if (tableOrder) {
             setSelectedTableOrder(tableOrder);
         }
     };
 
     const getStats = () => {
-        const occupiedTableIds = new Set(orders.filter(o => o.status !== 'paid').map(o => o.table_id));
+        const occupiedTableIds = new Set(
+            orders
+                .filter(o => o.status !== 'paid' && o.status !== 'rejected')
+                .map(o => o.table_id)
+        );
         const occupied = occupiedTableIds.size;
         const free = tables.length - occupied;
-        const activeOrders = orders.length;
+        const activeOrders = orders.filter(o => o.status !== 'paid' && o.status !== 'rejected').length;
 
         // Revenue Breakdown
         const paidOrders = orders.filter(o => o.status === 'paid');
         const revenue = paidOrders.reduce((acc, curr) => acc + curr.total, 0);
-        
+
         const cashRevenue = paidOrders.reduce((acc, curr) => {
             const payMeta = curr.items.find(i => i.type === 'PAYMENT_METADATA');
             const method = curr.payment_method || payMeta?.method || 'Cash';
@@ -673,12 +713,12 @@ const AdminPage = () => {
                     marginBottom: '28px'
                 }}>
                     {[
-                        { label: 'Occupied',  val: stats.occupied,      icon: '🪑', c: 'var(--text-main)' },
-                        { label: 'Free',       val: stats.free,          icon: '✅', c: 'var(--accent-green)' },
-                        { label: 'Orders',     val: stats.activeOrders,  icon: '📋', c: 'var(--accent-purple)' },
-                        { label: 'Total Rev',  val: `₹${stats.revenue}`, icon: '💰', c: 'var(--text-main)' },
-                        { label: 'Cash',       val: `₹${stats.cashRevenue}`, icon: '💵', c: '#fbbf24' },
-                        { label: 'Online',     val: `₹${stats.onlineRevenue}`, icon: '💳', c: '#60a5fa' }
+                        { label: 'Occupied', val: stats.occupied, icon: '🪑', c: 'var(--text-main)' },
+                        { label: 'Free', val: stats.free, icon: '✅', c: 'var(--accent-green)' },
+                        { label: 'Orders', val: stats.activeOrders, icon: '📋', c: 'var(--accent-purple)' },
+                        { label: 'Total Rev', val: `₹${stats.revenue}`, icon: '💰', c: 'var(--text-main)' },
+                        { label: 'Cash', val: `₹${stats.cashRevenue}`, icon: '💵', c: '#fbbf24' },
+                        { label: 'Online', val: `₹${stats.onlineRevenue}`, icon: '💳', c: '#60a5fa' }
                     ].map((s, i) => (
                         <div key={i} className="glass" style={{ padding: '16px 12px', borderRadius: '18px', textAlign: 'center' }}>
                             <p style={{ fontSize: '1.2rem', marginBottom: '4px' }}>{s.icon}</p>
@@ -691,9 +731,9 @@ const AdminPage = () => {
                 {/* Tabs */}
                 <div style={{ display: 'flex', gap: '6px', marginBottom: '24px', background: 'var(--glass)', padding: '5px', borderRadius: '18px', overflowX: 'auto', flexWrap: 'nowrap' }}>
                     {[
-                        { id: 'floor',     label: '🪑 Floor' },
-                        { id: 'queue',     label: '📋 Queue' },
-                        { id: 'takeaway',  label: '📦 Parcel' },
+                        { id: 'floor', label: '🪑 Floor' },
+                        { id: 'queue', label: '📋 Queue' },
+                        { id: 'takeaway', label: '📦 Parcel' },
                         { id: 'inventory', label: '🏷️ Inventory' },
                         { id: 'categories', label: '📂 Categories' },
                         { id: 'customers', label: '👥 Customers' },
@@ -733,7 +773,7 @@ const AdminPage = () => {
                                 const formData = new FormData(e.target);
                                 const imageFile = formData.get('image');
                                 let image_url = null;
-                                
+
                                 if (imageFile && imageFile.size > 0) {
                                     image_url = await handleImageUpload(imageFile);
                                 }
@@ -772,9 +812,9 @@ const AdminPage = () => {
                                 </button>
                             </form>
 
-                            <input 
-                                type="text" 
-                                placeholder="🔍 Search menu items..." 
+                            <input
+                                type="text"
+                                placeholder="🔍 Search menu items..."
                                 value={menuSearch}
                                 onChange={(e) => setMenuSearch(e.target.value)}
                                 className="glass"
@@ -798,7 +838,7 @@ const AdminPage = () => {
                                             </span>
                                         </div>
                                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                            <button 
+                                            <button
                                                 onClick={async () => {
                                                     await supabase.from('menu_items').update({ is_available: item.is_available === false ? true : false }).eq('id', item.id);
                                                     fetchMenuItems();
@@ -851,7 +891,7 @@ const AdminPage = () => {
                                 <button type="submit" style={{ padding: '16px', backgroundColor: 'var(--accent-white)', color: 'var(--bg-dark)', fontWeight: '700', borderRadius: '16px', letterSpacing: '-0.01em' }}>Add Table</button>
                             </form>
 
-                             <div style={{ maxHeight: '400px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', paddingRight: '8px' }}>
+                            <div style={{ maxHeight: '400px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', paddingRight: '8px' }}>
                                 {tables.map(table => (
                                     <div key={table.id} className="glass" style={{ padding: '16px', borderRadius: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.95rem' }}>
                                         <span style={{ fontWeight: '500', color: 'var(--text-main)' }}>Table {table.id} <span style={{ color: 'var(--text-muted)' }}>({table.seats} Seats)</span></span>
@@ -921,7 +961,7 @@ const AdminPage = () => {
                             const formData = new FormData(e.target);
                             const imageFile = formData.get('image');
                             let image_url = null;
-                            
+
                             if (imageFile && imageFile.size > 0) {
                                 image_url = await handleImageUpload(imageFile);
                             }
@@ -984,9 +1024,9 @@ const AdminPage = () => {
                         <div className="glass" style={{ padding: '32px', borderRadius: '24px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
                                 <h1 style={{ fontSize: '1.6rem', fontWeight: '800' }}>Customer Directory</h1>
-                                <input 
-                                    type="text" 
-                                    placeholder="🔍 Search by name or phone..." 
+                                <input
+                                    type="text"
+                                    placeholder="🔍 Search by name or phone..."
                                     className="glass"
                                     value={customerSearch}
                                     onChange={(e) => setCustomerSearch(e.target.value)}
@@ -1005,7 +1045,7 @@ const AdminPage = () => {
                                                 <h3 style={{ fontSize: '1.1rem', fontWeight: '700', marginBottom: '2px' }}>{customer.name}</h3>
                                                 <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>📞 {customer.phone_number}</p>
                                             </div>
-                                            <button 
+                                            <button
                                                 onClick={async () => {
                                                     if (confirm(`Delete contact for ${customer.name}?`)) {
                                                         await supabase.from('customers').delete().eq('id', customer.id);
@@ -1025,17 +1065,19 @@ const AdminPage = () => {
                         </div>
                     </div>
                 ) : activeTab === 'inventory' ? (
-                    <InventoryManager 
+                    <InventoryManager
                         materials={materials} setMaterials={setMaterials}
                         recipes={invRecipes} setRecipes={setInvRecipes}
                         consumeLog={consumeLog} setConsumeLog={setConsumeLog}
                         restockLog={restockLog} setRestockLog={setRestockLog}
                         menuItems={menuItems}
                     />
-                 ) : activeTab === 'floor' ? (
+                ) : activeTab === 'floor' ? (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '16px' }}>
                         {tables.map(table => {
-                            const tableOrder = orders.find(o => o.table_id === table.id && o.status !== 'paid');
+                            const tableOrder = orders.find(o =>
+                                o.table_id === table.id && o.status !== 'paid' && o.status !== 'rejected'
+                            );
                             const isOccupied = (tableOrder && tableOrder.status !== 'new') || !table.is_free;
                             const hasNewOrder = tableOrder?.status === 'new';
 
@@ -1113,11 +1155,11 @@ const AdminPage = () => {
                         >
                             📦 + Place Manual Parcel Order
                         </button>
-                        {orders.filter(o => o.table_id === 0).map(order => {
+                        {orders.filter(o => o.table_id === 0 && o.status !== 'paid' && o.status !== 'rejected').map(order => {
                             const meta = order.items.find(i => i.type === 'METADATA');
                             const parcelNo = meta ? `P-${meta.takeaway_no}` : order.id;
                             const displayItems = order.items.filter(i => i.type !== 'METADATA');
-                            
+
                             return (
                                 <div key={order.id} className="glass" style={{ padding: '24px', borderRadius: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <div style={{ flex: 1 }}>
@@ -1172,7 +1214,7 @@ const AdminPage = () => {
                                 </div>
                             );
                         })}
-                        {orders.filter(o => o.table_id === 0).length === 0 && (
+                        {orders.filter(o => o.table_id === 0 && o.status !== 'paid' && o.status !== 'rejected').length === 0 && (
                             <div style={{ textAlign: 'center', padding: '120px 0', color: 'var(--text-muted)', fontSize: '1.2rem', fontWeight: '500', letterSpacing: '-0.01em' }}>
                                 No active parcel orders
                             </div>
@@ -1180,7 +1222,7 @@ const AdminPage = () => {
                     </div>
                 ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                        {orders.filter(o => o.table_id !== 0).map(order => (
+                        {orders.filter(o => o.table_id !== 0 && o.status !== 'paid' && o.status !== 'rejected').map(order => (
                             <div key={order.id} className="glass" style={{ padding: '24px', borderRadius: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '12px' }}>
@@ -1216,7 +1258,7 @@ const AdminPage = () => {
                                 </div>
                             </div>
                         ))}
-                        {orders.filter(o => o.table_id !== 0).length === 0 && (
+                        {orders.filter(o => o.table_id !== 0 && o.status !== 'paid' && o.status !== 'rejected').length === 0 && (
                             <div style={{ textAlign: 'center', padding: '120px 0', color: 'var(--text-muted)', fontSize: '1.2rem', fontWeight: '500', letterSpacing: '-0.01em' }}>
                                 No active orders in queue
                             </div>
@@ -1265,14 +1307,14 @@ const AdminPage = () => {
                                         <div key={idxKey} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px', fontSize: '1.1rem', color: 'var(--text-main)', alignItems: 'center' }}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: 'var(--glass)', padding: '4px 8px', borderRadius: '10px', border: '1px solid var(--border-subtle)' }}>
-                                                    <button 
+                                                    <button
                                                         onClick={() => handleUpdateItemQty(selectedTableOrder.id, item.name, -1, item.isParcel)}
                                                         style={{ background: 'none', border: 'none', color: 'var(--text-main)', fontSize: '1.2rem', cursor: 'pointer', padding: '0 4px', fontWeight: 'bold' }}
                                                     >
                                                         -
                                                     </button>
                                                     <span style={{ minWidth: '20px', textAlign: 'center', fontWeight: '700', fontSize: '0.95rem' }}>{item.qty}</span>
-                                                    <button 
+                                                    <button
                                                         onClick={() => handleUpdateItemQty(selectedTableOrder.id, item.name, 1, item.isParcel)}
                                                         style={{ background: 'none', border: 'none', color: 'var(--text-main)', fontSize: '1.2rem', cursor: 'pointer', padding: '0 4px', fontWeight: 'bold' }}
                                                     >
@@ -1308,15 +1350,15 @@ const AdminPage = () => {
                                 {/* Add Item Section */}
                                 <div style={{ marginTop: '20px', borderTop: '1px dashed var(--border-subtle)', paddingTop: '20px' }}>
                                     {!isAddingItem ? (
-                                        <button 
+                                        <button
                                             onClick={() => setIsAddingItem(true)}
-                                            style={{ 
-                                                width: '100%', 
-                                                padding: '12px', 
-                                                backgroundColor: 'rgba(255,255,255,0.05)', 
-                                                border: '1px solid var(--border-subtle)', 
-                                                borderRadius: '12px', 
-                                                color: 'var(--text-main)', 
+                                            style={{
+                                                width: '100%',
+                                                padding: '12px',
+                                                backgroundColor: 'rgba(255,255,255,0.05)',
+                                                border: '1px solid var(--border-subtle)',
+                                                borderRadius: '12px',
+                                                color: 'var(--text-main)',
                                                 fontWeight: '600',
                                                 cursor: 'pointer'
                                             }}
@@ -1326,9 +1368,9 @@ const AdminPage = () => {
                                     ) : (
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                                <input 
-                                                    type="text" 
-                                                    placeholder="Search item..." 
+                                                <input
+                                                    type="text"
+                                                    placeholder="Search item..."
                                                     value={addItemSearch}
                                                     onChange={(e) => setAddItemSearch(e.target.value)}
                                                     autoFocus
@@ -1347,7 +1389,7 @@ const AdminPage = () => {
                                                         .filter(i => i.is_available !== false)
                                                         .filter(i => i.name.toLowerCase().includes(addItemSearch.toLowerCase()))
                                                         .map(item => (
-                                                            <button 
+                                                            <button
                                                                 key={item.id}
                                                                 onClick={async () => {
                                                                     await placeManualOrder(selectedTableOrder.table_id, [{ ...item, qty: 1, isParcel: isAddNewAsParcel }]);
@@ -1362,13 +1404,13 @@ const AdminPage = () => {
                                                                         if (latest) setSelectedTableOrder(latest);
                                                                     }
                                                                 }}
-                                                                style={{ 
-                                                                    display: 'flex', 
-                                                                    justifyContent: 'space-between', 
-                                                                    padding: '12px 16px', 
-                                                                    backgroundColor: 'rgba(255,255,255,0.03)', 
-                                                                    border: '1px solid var(--border-subtle)', 
-                                                                    borderRadius: '12px', 
+                                                                style={{
+                                                                    display: 'flex',
+                                                                    justifyContent: 'space-between',
+                                                                    padding: '12px 16px',
+                                                                    backgroundColor: 'rgba(255,255,255,0.03)',
+                                                                    border: '1px solid var(--border-subtle)',
+                                                                    borderRadius: '12px',
                                                                     color: 'white',
                                                                     textAlign: 'left',
                                                                     cursor: 'pointer'
@@ -1388,8 +1430,8 @@ const AdminPage = () => {
                                 {/* Customer Info for Direct Payment */}
                                 <div style={{ marginTop: '20px', borderTop: '1px solid var(--border-subtle)', paddingTop: '20px', display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
                                     <div style={{ position: 'relative' }}>
-                                        <input 
-                                            type="text" 
+                                        <input
+                                            type="text"
                                             placeholder="Customer Phone (10 digits)"
                                             className="glass"
                                             value={payPhone}
@@ -1406,8 +1448,8 @@ const AdminPage = () => {
                                             </span>
                                         )}
                                     </div>
-                                    <input 
-                                        type="text" 
+                                    <input
+                                        type="text"
                                         placeholder="Customer Name"
                                         className="glass"
                                         value={payName}
@@ -1485,25 +1527,25 @@ const AdminPage = () => {
                         maxHeight: '90vh',
                         overflowY: 'auto'
                     }}>
-                        <button 
-                            onClick={() => setQrTable(null)} 
-                            style={{ 
-                                position: 'absolute', 
-                                top: '20px', 
-                                right: '20px', 
-                                background: 'var(--glass)', 
-                                border: '1px solid var(--border-subtle)', 
-                                width: '36px', 
-                                height: '36px', 
-                                borderRadius: '18px', 
-                                color: 'white', 
+                        <button
+                            onClick={() => setQrTable(null)}
+                            style={{
+                                position: 'absolute',
+                                top: '20px',
+                                right: '20px',
+                                background: 'var(--glass)',
+                                border: '1px solid var(--border-subtle)',
+                                width: '36px',
+                                height: '36px',
+                                borderRadius: '18px',
+                                color: 'white',
                                 cursor: 'pointer',
                                 zIndex: 10
                             }}
                         >✕</button>
 
                         {/* Designed QR Card for Printing */}
-                        <div id="qr-to-print" style={{ 
+                        <div id="qr-to-print" style={{
                             position: 'relative',
                             width: '320px',
                             boxShadow: '0 20px 50px rgba(0,0,0,0.2)',
@@ -1567,13 +1609,6 @@ const AdminPage = () => {
                                         color: '#D4AF37', fontFamily: '"Times New Roman", Times, serif',
                                         fontSize: '110%', letterSpacing: '1px', textAlign: 'center'
                                     }}>www.kbcdawat.com</div>
-                                </div>
-
-                                <div style={{
-                                    color: '#D4AF37', fontFamily: 'sans-serif',
-                                    fontSize: '60%', letterSpacing: '0.08em', zIndex: 1,
-                                    textAlign: 'center', fontWeight: 'bold', lineHeight: '1.4'
-                                }}>
                                     <div>FOOOD WEB</div>
                                     <div style={{ opacity: 0.9 }}>POWERED BY SILOVATION TECHNOLOGIES</div>
                                 </div>
@@ -1680,7 +1715,7 @@ const AdminPage = () => {
                                     style={{ flex: 1, padding: '12px', borderRadius: '12px', color: 'var(--text-main)', fontSize: '0.85rem' }}
                                 >
                                     <option value="">Select Material</option>
-                                    {materials.map(m => <option key={m.id} value={m.id} style={{color:'black'}}>{m.name}</option>)}
+                                    {materials.map(m => <option key={m.id} value={m.id} style={{ color: 'black' }}>{m.name}</option>)}
                                 </select>
                                 <input
                                     type="number"
@@ -1723,26 +1758,26 @@ const AdminPage = () => {
                             {/* Menu Selection */}
                             <div style={{ flex: 2, display: 'flex', flexDirection: 'column', gap: '16px', overflowY: 'auto', paddingRight: '8px' }}>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                    <input 
-                                        type="text" 
-                                        placeholder="🔍 Search items by name..." 
+                                    <input
+                                        type="text"
+                                        placeholder="🔍 Search items by name..."
                                         value={manualSearch}
                                         onChange={(e) => setManualSearch(e.target.value)}
-                                        className="glass" 
+                                        className="glass"
                                         style={{ width: '100%', padding: '14px 20px', borderRadius: '16px', color: 'white', border: '1px solid var(--border-subtle)', outline: 'none' }}
                                     />
                                     <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '8px', msOverflowStyle: 'none', scrollbarWidth: 'none' }}>
                                         {['all', ...categories.map(c => c.name)].map(catName => (
-                                            <button 
-                                                key={catName} 
+                                            <button
+                                                key={catName}
                                                 onClick={() => setManualCategory(catName)}
-                                                style={{ 
-                                                    padding: '8px 20px', 
-                                                    backgroundColor: manualCategory === catName ? 'var(--accent-white)' : 'var(--glass)', 
-                                                    color: manualCategory === catName ? 'var(--bg-dark)' : 'white', 
-                                                    border: '1px solid var(--border-subtle)', 
-                                                    borderRadius: '20px', 
-                                                    fontSize: '0.8rem', 
+                                                style={{
+                                                    padding: '8px 20px',
+                                                    backgroundColor: manualCategory === catName ? 'var(--accent-white)' : 'var(--glass)',
+                                                    color: manualCategory === catName ? 'var(--bg-dark)' : 'white',
+                                                    border: '1px solid var(--border-subtle)',
+                                                    borderRadius: '20px',
+                                                    fontSize: '0.8rem',
                                                     fontWeight: '700',
                                                     whiteSpace: 'nowrap',
                                                     transition: 'all 0.2s'
@@ -1759,8 +1794,8 @@ const AdminPage = () => {
                                         .filter(i => manualCategory === 'all' || i.category === manualCategory)
                                         .filter(i => i.name.toLowerCase().includes(manualSearch.toLowerCase()))
                                         .map(item => (
-                                            <div 
-                                                key={item.id} 
+                                            <div
+                                                key={item.id}
                                                 onClick={() => {
                                                     const existing = manualCart.find(i => i.id === item.id);
                                                     if (existing) {
@@ -1769,7 +1804,7 @@ const AdminPage = () => {
                                                         setManualCart(prev => [...prev, { ...item, qty: 1 }]);
                                                     }
                                                 }}
-                                                className="glass" 
+                                                className="glass"
                                                 style={{ padding: '12px', borderRadius: '20px', textAlign: 'center', cursor: 'pointer' }}
                                             >
                                                 <div style={{ width: '100%', aspectRatio: '1', borderRadius: '12px', backgroundColor: 'rgba(255,255,255,0.05)', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
@@ -1794,13 +1829,13 @@ const AdminPage = () => {
                                                 <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{item.qty} x ₹{item.price}</p>
                                             </div>
                                             <div style={{ display: 'flex', gap: '8px' }}>
-                                                <button 
+                                                <button
                                                     onClick={() => {
                                                         setManualCart(prev => prev.map(i => i.id === item.id ? { ...i, qty: Math.max(0, i.qty - 1) } : i).filter(i => i.qty > 0));
                                                     }}
                                                     style={{ width: '24px', height: '24px', borderRadius: '12px', border: '1px solid var(--border-subtle)', color: 'white' }}
                                                 >-</button>
-                                                <button 
+                                                <button
                                                     onClick={() => {
                                                         setManualCart(prev => prev.map(i => i.id === item.id ? { ...i, qty: i.qty + 1 } : i));
                                                     }}
@@ -1815,7 +1850,7 @@ const AdminPage = () => {
                                         <span>Total</span>
                                         <span>₹{manualCart.reduce((acc, curr) => acc + (curr.price * curr.qty), 0)}</span>
                                     </div>
-                                    <button 
+                                    <button
                                         onClick={() => {
                                             if (manualCart.length === 0) return;
                                             placeManualOrder(showManualOrder, manualCart);
@@ -1845,7 +1880,7 @@ const AdminPage = () => {
                             const formData = new FormData(e.target);
                             const imageFile = formData.get('image');
                             let image_url = editItem.image_url;
-                            
+
                             if (imageFile && imageFile.size > 0) {
                                 image_url = await handleImageUpload(imageFile);
                             }
@@ -1872,7 +1907,7 @@ const AdminPage = () => {
                             <div style={{ display: 'flex', gap: '12px' }}>
                                 <input name="price" type="number" defaultValue={editItem.price} placeholder="Price" required className="glass" style={{ flex: 1, padding: '14px', borderRadius: '14px', color: 'var(--text-main)' }} />
                                 <select name="category" defaultValue={editItem.category} className="glass" style={{ flex: 1, padding: '14px', borderRadius: '14px', color: 'var(--text-main)', appearance: 'none' }}>
-                                    {categories.map(cat => <option key={cat.id} value={cat.name} style={{color:'black'}}>{cat.name}</option>)}
+                                    {categories.map(cat => <option key={cat.id} value={cat.name} style={{ color: 'black' }}>{cat.name}</option>)}
                                 </select>
                             </div>
                             <textarea name="description" defaultValue={editItem.description} placeholder="Description" className="glass" style={{ padding: '14px', borderRadius: '14px', color: 'var(--text-main)', minHeight: '80px' }} />
@@ -1905,7 +1940,7 @@ const AdminPage = () => {
                             const formData = new FormData(e.target);
                             const imageFile = formData.get('image');
                             let image_url = editCategory.image_url;
-                            
+
                             if (imageFile && imageFile.size > 0) {
                                 image_url = await handleImageUpload(imageFile);
                             }
