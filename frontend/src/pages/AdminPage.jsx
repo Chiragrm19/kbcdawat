@@ -38,6 +38,14 @@ const AdminPage = () => {
     const [payName, setPayName] = useState('');
     const [payExists, setPayExists] = useState(false);
 
+    // Table Transfer/Combine State
+    const [showTransferModal, setShowTransferModal] = useState(false);
+    const [showCombineModal, setShowCombineModal] = useState(false);
+    const [tableActionTarget, setTableActionTarget] = useState('');
+
+    // Parcel Handover Payment State
+    const [parcelHandoverId, setParcelHandoverId] = useState(null);
+
     // Security Utility: Sanitize inputs to prevent XSS
     const sanitize = (str) => {
         if (typeof str !== 'string') return str;
@@ -85,7 +93,9 @@ const AdminPage = () => {
         const { data } = await supabase.from('menu_items').select('*');
         if (data) {
             setMenuItems(data);
+            return data;
         }
+        return [];
     };
 
     const fetchTables = async () => {
@@ -135,7 +145,8 @@ const AdminPage = () => {
 
     const fetchInitialData = async () => {
         setLoading(true);
-        await Promise.all([fetchTables(), fetchOrders(), fetchMenuItems(), fetchCategories(), fetchCustomers()]);
+        const results = await Promise.all([fetchTables(), fetchOrders(), fetchMenuItems(), fetchCategories(), fetchCustomers()]);
+        const fetchedMenu = results[2] || []; // results[2] corresponds to fetchMenuItems return value
 
         // Auto-seed required drinks if missing
         const requiredDrinks = [
@@ -144,13 +155,17 @@ const AdminPage = () => {
             { name: 'Thumbs Up', price: 40, category: 'cold', emoji: '🥤', description: 'Strong cola', is_veg: true },
         ];
 
+        let needsRefresh = false;
         for (const drink of requiredDrinks) {
-            if (!menuItems.find(m => m.name.toLowerCase() === drink.name.toLowerCase())) {
+            if (!fetchedMenu.find(m => m.name.toLowerCase() === drink.name.toLowerCase())) {
                 await supabase.from('menu_items').insert(drink);
+                needsRefresh = true;
             }
         }
 
-        await fetchMenuItems(); // Refresh after seeding
+        if (needsRefresh) {
+            await fetchMenuItems(); // Refresh after seeding
+        }
         setLoading(false);
     };
 
@@ -286,12 +301,12 @@ const AdminPage = () => {
                 const { data } = await supabase
                     .from('orders')
                     .select('*')
-                    .eq('table_id', tableId)
                     .neq('status', 'paid')
                     .neq('status', 'rejected');
 
                 if (data && data.length > 0) {
-                    orderToUpdate = data[0]; // Take the first active order for this table
+                    const existing = data.find(o => o.table_id === tableId || (o.items && o.items.some(i => i.type === 'COMBINED' && i.tableId === tableId)));
+                    if (existing) orderToUpdate = existing;
                 }
             }
 
@@ -527,7 +542,15 @@ const AdminPage = () => {
                 setPayExists(false);
             }
 
-            const { error: tableError } = await supabase.from('tables').update({ is_free: true }).eq('id', tableId);
+            const targetOrder = orders.find(o => o.table_id === tableId && o.status !== 'paid' && o.status !== 'rejected');
+            let tableIdsToUpdate = [tableId];
+            if (targetOrder && targetOrder.items) {
+                targetOrder.items.forEach(i => {
+                    if (i.type === 'COMBINED' && i.tableId) tableIdsToUpdate.push(i.tableId);
+                });
+            }
+
+            const { error: tableError } = await supabase.from('tables').update({ is_free: true }).in('id', tableIdsToUpdate);
             if (tableError) throw tableError;
 
             const updates = { status: 'paid' };
@@ -554,7 +577,7 @@ const AdminPage = () => {
                 }
             }
 
-            setTables(prev => prev.map(t => t.id === tableId ? { ...t, is_free: true } : t));
+            setTables(prev => prev.map(t => tableIdsToUpdate.includes(t.id) ? { ...t, is_free: true } : t));
             setOrders(prev => prev.filter(o => o.table_id !== tableId || o.status === 'paid'));
 
             setSelectedTableOrder(null);
@@ -565,15 +588,29 @@ const AdminPage = () => {
         }
     };
 
-    const completeTakeaway = async (orderId) => {
+    const completeTakeaway = async (orderId, paymentMethod = 'Cash') => {
         try {
+            const updates = { status: 'paid' };
+            // Store payment method inside items if column not available
+            const targetOrder = orders.find(o => o.id === orderId);
+            if (targetOrder) {
+                const existingMeta = targetOrder.items.find(i => i.type === 'PAYMENT_METADATA');
+                let newItems = [...targetOrder.items];
+                if (existingMeta) {
+                    newItems = newItems.map(i => i.type === 'PAYMENT_METADATA' ? { ...i, method: paymentMethod } : i);
+                } else {
+                    newItems.push({ type: 'PAYMENT_METADATA', method: paymentMethod });
+                }
+                updates.items = newItems;
+            }
+
             const { error } = await supabase.from('orders')
-                .update({ status: 'paid' })
+                .update(updates)
                 .eq('id', orderId);
 
             if (error) throw error;
             setOrders(prev => prev.filter(o => o.id !== orderId));
-            alert('Parcel Handed Over Successfully!');
+            setParcelHandoverId(null);
         } catch (err) {
             console.error('Error completing takeaway:', err.message);
             alert('Failed to complete takeaway: ' + err.message);
@@ -608,10 +645,80 @@ const AdminPage = () => {
 
     const handleTableClick = (table) => {
         const tableOrder = orders.find(o =>
-            o.table_id === table.id && o.status !== 'paid' && o.status !== 'rejected'
+            o.status !== 'paid' && o.status !== 'rejected' &&
+            (o.table_id === table.id || (o.items && o.items.some(i => i.type === 'COMBINED' && i.tableId === table.id)))
         );
         if (tableOrder) {
             setSelectedTableOrder(tableOrder);
+        }
+    };
+
+    const handleTransferTable = async () => {
+        if (!selectedTableOrder || !tableActionTarget) return;
+        const targetId = parseInt(tableActionTarget);
+        try {
+            await supabase.from('orders').update({ table_id: targetId }).eq('id', selectedTableOrder.id);
+            await supabase.from('tables').update({ is_free: false }).eq('id', targetId);
+            await supabase.from('tables').update({ is_free: true }).eq('id', selectedTableOrder.table_id);
+            
+            setShowTransferModal(false);
+            setTableActionTarget('');
+            setSelectedTableOrder(null);
+            fetchInitialData();
+            alert(`Order transferred to Table ${targetId} successfully!`);
+        } catch (err) {
+            alert('Failed to transfer: ' + err.message);
+        }
+    };
+
+    const handleCombineTable = async () => {
+        if (!selectedTableOrder || !tableActionTarget) return;
+        const targetId = parseInt(tableActionTarget);
+        try {
+            const targetTableArr = tables.find(t => t.id === targetId);
+            const { data: targetOrders } = await supabase
+                .from('orders')
+                .select('*')
+                .eq('table_id', targetId)
+                .neq('status', 'paid')
+                .neq('status', 'rejected');
+
+            let updatedItems = [...selectedTableOrder.items];
+            let additionalTotal = 0;
+
+            if (targetOrders && targetOrders.length > 0) {
+                const targetOrder = targetOrders[0];
+                targetOrder.items.forEach(newItem => {
+                    if (newItem.type === 'METADATA' || newItem.type === 'PAYMENT_METADATA' || newItem.type === 'COMBINED') return;
+                    const idx = updatedItems.findIndex(i => i.id === newItem.id && !!i.isParcel === !!newItem.isParcel);
+                    if (idx > -1) {
+                        updatedItems[idx].qty += (newItem.qty || 1);
+                    } else {
+                        updatedItems.push({ ...newItem, isNew: false });
+                    }
+                });
+                additionalTotal = targetOrder.total || 0;
+                await supabase.from('orders').update({ status: 'rejected' }).eq('id', targetOrder.id);
+            }
+
+            if (!updatedItems.some(i => i.type === 'COMBINED' && i.tableId === targetId)) {
+                updatedItems.push({ type: 'COMBINED', tableId: targetId });
+            }
+
+            const newTotal = selectedTableOrder.total + additionalTotal;
+            await supabase.from('orders').update({ items: updatedItems, total: newTotal }).eq('id', selectedTableOrder.id);
+
+            if (targetTableArr?.is_free) {
+                await supabase.from('tables').update({ is_free: false }).eq('id', targetId);
+            }
+
+            setShowCombineModal(false);
+            setTableActionTarget('');
+            setSelectedTableOrder(null);
+            fetchInitialData();
+            alert(`Table ${targetId} successfully combined into Table ${selectedTableOrder.table_id}!`);
+        } catch (err) {
+            alert('Failed to combine: ' + err.message);
         }
     };
 
@@ -1197,7 +1304,7 @@ const AdminPage = () => {
                                                 </button>
                                             ) : (
                                                 <button
-                                                    onClick={() => completeTakeaway(order.id)}
+                                                    onClick={() => setParcelHandoverId(order.id)}
                                                     style={{ padding: '8px 20px', fontSize: '0.9rem', backgroundColor: '#4ade80', color: '#000', borderRadius: '16px', fontWeight: '700' }}
                                                 >
                                                     Handover
@@ -1294,7 +1401,15 @@ const AdminPage = () => {
                                         return `Table ${selectedTableOrder.table_id} Order`;
                                     })()}
                                 </h2>
-                                <button onClick={() => setSelectedTableOrder(null)} style={{ backgroundColor: 'var(--glass)', border: '1px solid var(--border-subtle)', width: '36px', height: '36px', borderRadius: '18px', fontSize: '1.2rem', color: 'var(--text-main)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>✕</button>
+                                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                    {selectedTableOrder.table_id > 0 && (
+                                        <>
+                                            <button onClick={() => setShowTransferModal(true)} style={{ padding: '6px 12px', borderRadius: '12px', border: '1px solid var(--border-subtle)', backgroundColor: 'var(--glass)', color: 'var(--text-main)', fontSize: '0.85rem', fontWeight: '600' }}>Transfer ➡️</button>
+                                            <button onClick={() => setShowCombineModal(true)} style={{ padding: '6px 12px', borderRadius: '12px', border: '1px solid var(--border-subtle)', backgroundColor: 'var(--glass)', color: 'var(--text-main)', fontSize: '0.85rem', fontWeight: '600' }}>Combine 🔗</button>
+                                        </>
+                                    )}
+                                    <button onClick={() => setSelectedTableOrder(null)} style={{ backgroundColor: 'var(--glass)', border: '1px solid var(--border-subtle)', width: '36px', height: '36px', borderRadius: '18px', fontSize: '1.2rem', color: 'var(--text-main)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>✕</button>
+                                </div>
                             </div>
 
                             <div style={{ marginBottom: '32px' }}>
@@ -1493,6 +1608,60 @@ const AdminPage = () => {
                         </div>
                     </div>
                 )}
+
+                {/* Transfer Modal */}
+                {showTransferModal && (
+                    <div className="animate-overlay" style={{ position: 'fixed', inset: 0, zIndex: 2500, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)', padding: '24px' }}>
+                        <div className="glass animate-fade" style={{ width: '100%', maxWidth: '400px', borderRadius: '24px', padding: '32px', backgroundColor: 'var(--bg-surface)' }}>
+                            <h3 style={{ fontSize: '1.2rem', fontWeight: '700', marginBottom: '16px' }}>Transfer Order</h3>
+                            <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '24px' }}>Select an empty table to transfer this order to.</p>
+                            
+                            <select
+                                className="glass"
+                                value={tableActionTarget}
+                                onChange={(e) => setTableActionTarget(e.target.value)}
+                                style={{ width: '100%', padding: '12px', borderRadius: '12px', marginBottom: '24px', color: 'var(--text-main)', outline: 'none' }}
+                            >
+                                <option value="" style={{ color: 'black' }}>-- Select Empty Table --</option>
+                                {tables.filter(t => t.is_free && t.id !== 0).map(t => (
+                                    <option key={t.id} value={t.id} style={{ color: 'black' }}>Table {t.id}</option>
+                                ))}
+                            </select>
+
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button onClick={() => { setShowTransferModal(false); setTableActionTarget(''); }} style={{ flex: 1, padding: '12px', borderRadius: '12px', background: 'var(--glass)', color: 'white' }}>Cancel</button>
+                                <button onClick={handleTransferTable} disabled={!tableActionTarget} style={{ flex: 1, padding: '12px', borderRadius: '12px', background: tableActionTarget ? 'var(--text-main)' : 'var(--glass)', color: 'var(--bg-dark)', fontWeight: '700', opacity: tableActionTarget ? 1 : 0.5 }}>Confirm</button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Combine Modal */}
+                {showCombineModal && (
+                    <div className="animate-overlay" style={{ position: 'fixed', inset: 0, zIndex: 2500, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)', padding: '24px' }}>
+                        <div className="glass animate-fade" style={{ width: '100%', maxWidth: '400px', borderRadius: '24px', padding: '32px', backgroundColor: 'var(--bg-surface)' }}>
+                            <h3 style={{ fontSize: '1.2rem', fontWeight: '700', marginBottom: '16px' }}>Combine Order</h3>
+                            <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '24px' }}>Select a table to merge into the current order.</p>
+                            
+                            <select
+                                className="glass"
+                                value={tableActionTarget}
+                                onChange={(e) => setTableActionTarget(e.target.value)}
+                                style={{ width: '100%', padding: '12px', borderRadius: '12px', marginBottom: '24px', color: 'var(--text-main)', outline: 'none' }}
+                            >
+                                <option value="" style={{ color: 'black' }}>-- Select Table to Combine --</option>
+                                {tables.filter(t => t.id !== selectedTableOrder?.table_id && t.id !== 0).map(t => (
+                                    <option key={t.id} value={t.id} style={{ color: 'black' }}>Table {t.id} {t.is_free ? '(Free)' : '(Occupied)'}</option>
+                                ))}
+                            </select>
+
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button onClick={() => { setShowCombineModal(false); setTableActionTarget(''); }} style={{ flex: 1, padding: '12px', borderRadius: '12px', background: 'var(--glass)', color: 'white' }}>Cancel</button>
+                                <button onClick={handleCombineTable} disabled={!tableActionTarget} style={{ flex: 1, padding: '12px', borderRadius: '12px', background: tableActionTarget ? 'var(--text-main)' : 'var(--glass)', color: 'var(--bg-dark)', fontWeight: '700', opacity: tableActionTarget ? 1 : 0.5 }}>Confirm</button>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* QR Modal */}
@@ -1652,6 +1821,56 @@ const AdminPage = () => {
                     </div>
                 </div>
             )}
+
+            {/* Parcel Handover Payment Modal */}
+            {parcelHandoverId && (() => {
+                const parcelOrder = orders.find(o => o.id === parcelHandoverId);
+                const parcelItems = parcelOrder?.items?.filter(i => i.type !== 'METADATA' && i.type !== 'PAYMENT_METADATA' && i.type !== 'COMBINED') || [];
+                const parcelMeta = parcelOrder?.items?.find(i => i.type === 'METADATA');
+                return (
+                    <div className="animate-overlay" style={{ position: 'fixed', inset: 0, zIndex: 3500, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(12px)', padding: '24px' }}>
+                        <div className="glass animate-fade" style={{ width: '100%', maxWidth: '420px', borderRadius: '28px', padding: '36px', backgroundColor: 'var(--bg-surface)' }}>
+                            <h3 style={{ fontSize: '1.3rem', fontWeight: '800', marginBottom: '4px' }}>Parcel Handover</h3>
+                            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '24px' }}>
+                                Order #{parcelMeta ? `P-${parcelMeta.takeaway_no}` : parcelHandoverId}
+                            </p>
+
+                            {/* Order Items Summary */}
+                            <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '16px', padding: '16px', marginBottom: '24px', border: '1px solid var(--border-subtle)' }}>
+                                {parcelItems.map((item, i) => (
+                                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '0.9rem' }}>
+                                        <span style={{ color: 'var(--text-main)' }}>{item.qty}x {item.name}</span>
+                                        <span style={{ color: 'var(--text-muted)' }}>₹{item.price * item.qty}</span>
+                                    </div>
+                                ))}
+                                <div style={{ borderTop: '1px solid var(--border-subtle)', marginTop: '12px', paddingTop: '12px', display: 'flex', justifyContent: 'space-between', fontWeight: '800' }}>
+                                    <span>Total</span>
+                                    <span>₹{parcelOrder?.total}</span>
+                                </div>
+                            </div>
+
+                            <p style={{ fontSize: '0.9rem', fontWeight: '700', color: 'var(--text-main)', marginBottom: '16px' }}>Select Payment Method</p>
+                            <div style={{ display: 'flex', gap: '12px', marginBottom: '20px' }}>
+                                <button
+                                    onClick={() => completeTakeaway(parcelHandoverId, 'Cash')}
+                                    style={{ flex: 1, padding: '16px', borderRadius: '16px', background: '#fbbf24', color: '#000', fontWeight: '800', fontSize: '1.05rem' }}
+                                >
+                                    💵 Cash
+                                </button>
+                                <button
+                                    onClick={() => completeTakeaway(parcelHandoverId, 'Online')}
+                                    style={{ flex: 1, padding: '16px', borderRadius: '16px', background: '#60a5fa', color: '#000', fontWeight: '800', fontSize: '1.05rem' }}
+                                >
+                                    📲 Online
+                                </button>
+                            </div>
+                            <button onClick={() => setParcelHandoverId(null)} style={{ width: '100%', padding: '12px', borderRadius: '14px', background: 'var(--glass)', border: '1px solid var(--border-subtle)', color: 'var(--text-main)', fontWeight: '600' }}>
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                );
+            })()}
 
             {/* Real-time Order Popup */}
             {newOrder && (

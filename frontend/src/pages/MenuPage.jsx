@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import MenuCard from '../components/MenuCard';
@@ -16,7 +16,8 @@ const MenuPage = () => {
     const [displayOrderId, setDisplayOrderId] = useState(null);
     const [showThankYou, setShowThankYou] = useState(false);
     const [showReview, setShowReview] = useState(false);
-    const [isParcelOrder, setIsParcelOrder] = useState(false); // Renamed from isTakeawayOrder
+    const [isParcelOrder, setIsParcelOrder] = useState(false);
+    const [lastOrderItems, setLastOrderItems] = useState([]); // Store placed order items for success screen
     const wasOccupied = useRef(false);
 
     const location = useLocation();
@@ -168,14 +169,22 @@ const MenuPage = () => {
             // Only pure parcel QR scans have tableId === '0'. 
             const effectiveTableId = parseInt(tableId); // Strict adherence to scanned table
 
-            const { data: existingOrder, error: fetchError } = await supabase
+            // Fetch all active orders to check if this table is combined with another
+            const { data: activeOrders, error: fetchError } = await supabase
                 .from('orders')
                 .select('*')
-                .eq('table_id', effectiveTableId)
                 .neq('status', 'paid')
-                .maybeSingle();
+                .neq('status', 'rejected');
 
             if (fetchError && fetchError.code !== 'PGRST116') throw fetchError;
+
+            let existingOrder = null;
+            if (activeOrders) {
+                existingOrder = activeOrders.find(o => 
+                    o.table_id === effectiveTableId || 
+                    (o.items && o.items.some(i => i.type === 'COMBINED' && i.tableId === effectiveTableId))
+                );
+            }
 
             if (existingOrder) {
                 // Clear any previous isNew flags from the existing items list first
@@ -255,6 +264,7 @@ const MenuPage = () => {
                 }
             }
 
+            setLastOrderItems(cartItemsArray); // Save items before clearing
             setOrderStatus('success');
             setCart({});
         } catch (err) {
@@ -292,21 +302,39 @@ const MenuPage = () => {
     }
 
     if (orderStatus === 'success') {
+        const orderTotal = lastOrderItems.reduce((acc, i) => acc + (i.price * i.qty), 0);
         return (
             <div className="animate-fade" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', minHeight: '100vh', padding: '24px', background: 'var(--bg-dark)' }}>
-                <div className="success-checkmark animate-float">Γ£ô</div>
+                <div className="success-checkmark animate-float">✔</div>
                 <h1 style={{ fontSize: '2.8rem', marginBottom: '12px', fontWeight: '800', letterSpacing: '-0.05em', background: 'linear-gradient(135deg, #fff 0%, #a0a0c0 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
                     Order Placed.
                 </h1>
-                <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem', marginBottom: '40px', lineHeight: '1.6', fontWeight: '500', maxWidth: '280px' }}>
+                <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem', marginBottom: '32px', lineHeight: '1.6', fontWeight: '500', maxWidth: '280px' }}>
                     {isTakeaway
                         ? `Your order #${displayOrderId} is being prepared.`
-                        : `Table ${tableId} ΓÇö we're on it.`}
+                        : `Table ${tableId} — we're on it.`}
                 </p>
 
-                <div className="glass" style={{ padding: '28px 32px', borderRadius: '24px', width: '100%', maxWidth: '320px', marginBottom: '32px', borderTopColor: 'rgba(255,255,255,0.18)' }}>
+                {/* Order Summary */}
+                {lastOrderItems.length > 0 && (
+                    <div className="glass" style={{ width: '100%', maxWidth: '360px', borderRadius: '24px', padding: '24px', marginBottom: '24px', textAlign: 'left' }}>
+                        <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: '700', marginBottom: '16px' }}>Your Order</p>
+                        {lastOrderItems.map((item, i) => (
+                            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px', fontSize: '0.95rem' }}>
+                                <span style={{ color: 'var(--text-main)', fontWeight: '500' }}>{item.qty}× {item.name}</span>
+                                <span style={{ color: 'var(--text-muted)', fontWeight: '600' }}>₹{item.price * item.qty}</span>
+                            </div>
+                        ))}
+                        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '12px', marginTop: '8px', display: 'flex', justifyContent: 'space-between', fontWeight: '800', fontSize: '1.1rem', color: 'var(--text-main)' }}>
+                            <span>Total</span>
+                            <span>₹{orderTotal}</span>
+                        </div>
+                    </div>
+                )}
+
+                <div className="glass" style={{ padding: '28px 32px', borderRadius: '24px', width: '100%', maxWidth: '360px', marginBottom: '32px', borderTopColor: 'rgba(255,255,255,0.18)' }}>
                     <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: '700', marginBottom: '8px' }}>Estimated Wait</p>
-                    <p style={{ fontSize: '2.4rem', fontWeight: '800', color: 'var(--text-main)', letterSpacing: '-0.04em', lineHeight: 1 }}>15ΓÇô20</p>
+                    <p style={{ fontSize: '2.4rem', fontWeight: '800', color: 'var(--text-main)', letterSpacing: '-0.04em', lineHeight: 1 }}>15–20</p>
                     <p style={{ fontSize: '0.85rem', color: 'var(--text-faint)', fontWeight: '500', marginTop: '4px' }}>minutes</p>
                 </div>
 
