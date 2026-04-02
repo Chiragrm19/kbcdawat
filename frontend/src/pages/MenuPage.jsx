@@ -288,7 +288,7 @@ const MenuPage = () => {
         return (
             <div className="container animate-fade" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', minHeight: '100vh', padding: '24px' }}>
                 <div style={{ width: '100px', height: '100px', borderRadius: '50%', backgroundColor: 'var(--accent-white)', color: 'var(--bg-dark)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '50px', marginBottom: '40px', boxShadow: '0 12px 48px rgba(255,255,255,0.3)' }}>
-                    Γ£¿
+                    ✅
                 </div>
                 <h1 style={{ fontSize: '3rem', marginBottom: '16px', fontWeight: '700', letterSpacing: '-0.04em', lineHeight: '1.2' }}>Thank You.</h1>
                 <p style={{ color: 'var(--text-muted)', marginBottom: '48px', fontSize: '1.2rem', maxWidth: '300px', lineHeight: '1.5' }}>
@@ -305,7 +305,7 @@ const MenuPage = () => {
         const orderTotal = lastOrderItems.reduce((acc, i) => acc + (i.price * i.qty), 0);
         return (
             <div className="animate-fade" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', minHeight: '100vh', padding: '24px', background: 'var(--bg-dark)' }}>
-                <div className="success-checkmark animate-float">✔</div>
+                <div className="success-checkmark animate-float">✅</div>
                 <h1 style={{ fontSize: '2.8rem', marginBottom: '12px', fontWeight: '800', letterSpacing: '-0.05em', background: 'linear-gradient(135deg, #fff 0%, #a0a0c0 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
                     Order Placed.
                 </h1>
@@ -357,7 +357,7 @@ const MenuPage = () => {
                     <div>
                         <h1 style={{ fontSize: '1.8rem', color: 'var(--text-main)', fontWeight: '800', letterSpacing: '-0.05em', lineHeight: 1 }}>kbcdawat</h1>
                         <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem', fontWeight: '600', marginTop: '4px', letterSpacing: '0.02em' }}>
-                            {isTakeaway ? '≡ƒôª Parcel Order' : `≡ƒì╜∩╕Å Table ${tableId}`}
+                            {isTakeaway ? '📦 Parcel Order' : `🍽️ Table ${tableId}`}
                         </p>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 12px', borderRadius: '20px', background: 'rgba(74,222,128,0.08)', border: '1px solid rgba(74,222,128,0.15)' }}>
@@ -368,7 +368,7 @@ const MenuPage = () => {
 
                 <input
                     type="text"
-                    placeholder="≡ƒöì  Search menuΓÇª"
+                    placeholder="🔍  Search menu..."
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     style={{
@@ -429,7 +429,25 @@ const MenuPage = () => {
                                 {cat.image_url ? (
                                     <img src={cat.image_url} alt={cat.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                                 ) : (
-                                    <span style={{ fontSize: '1.6rem', filter: isActive ? 'none' : 'grayscale(0.5)' }}>{cat.id === 'all' ? '≡ƒÅá' : '≡ƒì╜∩╕Å'}</span>
+                                    <span style={{ fontSize: '1.6rem', filter: isActive ? 'none' : 'grayscale(0.5)' }}>
+                                        {(() => {
+                                            if (cat.id === 'all') return '🏠';
+                                            const name = cat.name.toLowerCase();
+                                            if (name.includes('momo')) return '🥟';
+                                            if (name.includes('chinese')) return '🍜';
+                                            if (name.includes('rice') || name.includes('pulav')) return '🍚';
+                                            if (name.includes('maggi') || name.includes('noodle')) return '🍝';
+                                            if (name.includes('fries') || name.includes('potato')) return '🍟';
+                                            if (name.includes('pav') || name.includes('bhaji') || name.includes('misal')) return '🫕';
+                                            if (name.includes('coffee')) return '☕';
+                                            if (name.includes('mojito') || name.includes('drink') || name.includes('cold')) return '🍹';
+                                            if (name.includes('milkshake')) return '🥛';
+                                            if (name.includes('pizza')) return '🍕';
+                                            if (name.includes('burger')) return '🍔';
+                                            if (name.includes('dessert') || name.includes('sweet')) return '🍰';
+                                            return '🍽️';
+                                        })()}
+                                    </span>
                                 )}
                             </div>
                             <span className="cat-name-text" style={{ 
@@ -511,7 +529,7 @@ const MenuPage = () => {
                     }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
                             <h2 style={{ fontSize: '1.5rem', fontWeight: '700', letterSpacing: '-0.02em', color: 'var(--text-main)' }}>Review Order</h2>
-                            <button onClick={() => setShowReview(false)} style={{ backgroundColor: 'var(--glass)', border: '1px solid var(--border-subtle)', width: '36px', height: '36px', borderRadius: '18px', fontSize: '1.2rem', color: 'var(--text-main)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Γ£ò</button>
+                            <button onClick={() => setShowReview(false)} style={{ backgroundColor: 'var(--glass)', border: '1px solid var(--border-subtle)', width: '36px', height: '36px', borderRadius: '18px', fontSize: '1.2rem', color: 'var(--text-main)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
                         </div>
 
                         <div style={{ flex: 1, overflowY: 'auto', marginBottom: '24px', paddingRight: '12px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -519,7 +537,7 @@ const MenuPage = () => {
                                 <div key={item.id} className="premium-border" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <div>
                                         <p style={{ fontSize: '1.1rem', fontWeight: '600', color: 'var(--text-main)', marginBottom: '4px' }}>{item.name}</p>
-                                        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', fontWeight: '500' }}>Γé╣{item.price * item.qty}</p>
+                                        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', fontWeight: '500' }}>₹{item.price * item.qty}</p>
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px', backgroundColor: 'var(--glass)', padding: '6px 12px', borderRadius: '20px', border: '1px solid var(--border-subtle)' }}>
                                         <button onClick={() => removeFromCart(item.id)} style={{ backgroundColor: 'transparent', color: 'var(--text-main)', fontSize: '1.2rem', padding: '4px 8px' }}>-</button>
@@ -550,7 +568,7 @@ const MenuPage = () => {
                             <>
                                 <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '24px', marginBottom: '32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <span style={{ fontSize: '1.2rem', color: 'var(--text-muted)', fontWeight: '500' }}>Total</span>
-                                    <span style={{ fontSize: '1.8rem', fontWeight: 'bold', color: 'var(--text-main)', letterSpacing: '-0.02em' }}>Γé╣{cartTotal}</span>
+                                    <span style={{ fontSize: '1.8rem', fontWeight: 'bold', color: 'var(--text-main)', letterSpacing: '-0.02em' }}>₹{cartTotal}</span>
                                 </div>
 
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -580,7 +598,7 @@ const MenuPage = () => {
                                                 justifyContent: 'center',
                                                 transition: 'all 0.2s'
                                             }}>
-                                                {isParcelOrder && <span style={{ color: 'white', fontSize: '14px' }}>Γ£ô</span>}
+                                                {isParcelOrder && <span style={{ color: 'white', fontSize: '14px' }}>✓</span>}
                                             </div>
                                             <div>
                                                 <p style={{ fontSize: '0.95rem', fontWeight: '700', color: 'var(--text-main)' }}>Pack as Parcel?</p>
@@ -639,7 +657,7 @@ const MenuPage = () => {
             {orderStatus === 'rejected' && (
                 <div className="animate-overlay" style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
                     <div className="glass animate-fade" style={{ width: '100%', maxWidth: '400px', borderRadius: '32px', padding: '40px', textAlign: 'center' }}>
-                        <h1 style={{ fontSize: '4rem', marginBottom: '16px' }}>Γ¥î</h1>
+                        <h1 style={{ fontSize: '4rem', marginBottom: '16px' }}>❌</h1>
                         <h2 style={{ fontSize: '1.8rem', fontWeight: '800', marginBottom: '12px', color: 'var(--text-main)', letterSpacing: '-0.02em' }}>Order Unavailable</h2>
                         <p style={{ color: 'var(--text-muted)', marginBottom: '32px', fontSize: '0.95rem' }}>We are sorry, but some items in your order are currently out of stock. Your order has been cancelled.</p>
                         <button
