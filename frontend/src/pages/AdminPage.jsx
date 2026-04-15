@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import { useNavigate } from 'react-router-dom';
 import OrderPopup from '../components/OrderPopup';
 import InvoiceModal from '../components/InvoiceModal';
 import InventoryManager from '../components/InventoryManager';
@@ -7,9 +8,11 @@ import BulkQRModal from '../components/BulkQRModal';
 import { QRCodeSVG } from 'qrcode.react';
 
 const AdminPage = () => {
+    const navigate = useNavigate();
     const [tables, setTables] = useState([]);
     const [orders, setOrders] = useState([]);
     const [activeTab, setActiveTab] = useState('floor'); // 'floor' | 'queue' | 'takeaway' | 'customize'
+    const [showCustomizeMenu, setShowCustomizeMenu] = useState(false);
     const [newOrder, setNewOrder] = useState(null);
     const [notifiedOrderTotals, setNotifiedOrderTotals] = useState({});
     const [selectedTableOrder, setSelectedTableOrder] = useState(null);
@@ -55,6 +58,60 @@ const AdminPage = () => {
     // Recipe Modal State
     const [newMatId, setNewMatId] = useState('');
     const [newMatQty, setNewMatQty] = useState('');
+
+    // Audio Notification Context
+    const audioContextRef = React.useRef(null);
+    const lastBeepTimeRef = React.useRef(0);
+
+    const playBeep = React.useCallback(() => {
+        try {
+            if (!audioContextRef.current) {
+                audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            const ctx = audioContextRef.current;
+            if (ctx.state === 'suspended') {
+                ctx.resume();
+            }
+
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(880, ctx.currentTime); // A5 pitch
+
+            gain.gain.setValueAtTime(0, ctx.currentTime);
+            gain.gain.linearRampToValueAtTime(0.5, ctx.currentTime + 0.05);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+
+            osc.start();
+            osc.stop(ctx.currentTime + 0.5);
+        } catch (err) {
+            console.warn('Audio feedback blocked by browser:', err);
+        }
+    }, []);
+
+    // Monitor for New Orders and Play Beep every 30 seconds
+    React.useEffect(() => {
+        const hasNewOrders = orders.some(o => o.status === 'new');
+        
+        if (hasNewOrders) {
+            // Immediate beep on transition if it's been long enough
+            const checkAndPlay = () => {
+                const now = Date.now();
+                if (now - lastBeepTimeRef.current >= 30000) {
+                    playBeep();
+                    lastBeepTimeRef.current = now;
+                }
+            };
+
+            checkAndPlay(); // Initial check
+            const beepTimer = setInterval(checkAndPlay, 1000);
+            return () => clearInterval(beepTimer);
+        }
+    }, [orders, playBeep]);
 
     const detectedIp = "10.18.40.43";
 
@@ -755,59 +812,200 @@ const AdminPage = () => {
 
     return (
         <>
+            <style>
+                {`
+                    .nav-item-btn:hover {
+                        background-color: rgba(255, 255, 255, 0.1) !important;
+                        transform: translateX(4px);
+                    }
+                `}
+            </style>
             <div className="admin-container animate-fade" style={{ minHeight: '100vh', paddingBottom: '40px' }}>
-                <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px', gap: '16px', flexWrap: 'wrap' }}>
+                <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px', gap: '16px', flexWrap: 'wrap', position: 'relative', zIndex: 1000 }}>
                     <div>
                         <h1 style={{ fontSize: 'clamp(1.4rem, 5vw, 2.2rem)', color: 'var(--text-main)', fontWeight: '800', letterSpacing: '-0.04em', lineHeight: 1.1 }}>kbcdawat ADMIN</h1>
                         <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem', fontWeight: '500', marginTop: '4px' }}>Dashboard & Operations</p>
                     </div>
                     <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        {/* Dashboard Navigation Button */}
                         <button
-                            onClick={() => setActiveTab('customize')}
+                            onClick={() => navigate('/dashboard')}
                             style={{
-                                padding: '10px 16px',
+                                padding: '10px 18px',
                                 borderRadius: '14px',
-                                backgroundColor: activeTab === 'customize' ? 'var(--accent-white)' : 'var(--glass)',
-                                color: activeTab === 'customize' ? 'var(--bg-dark)' : 'var(--text-main)',
-                                border: '1px solid var(--border-subtle)',
-                                fontSize: '0.85rem',
-                                fontWeight: '700',
-                                transition: 'all 0.3s'
-                            }}
-                        >
-                            ⚙️ Customize
-                        </button>
-                        <button
-                            onClick={clearAllData}
-                            style={{
-                                padding: '10px 16px',
-                                borderRadius: '14px',
-                                backgroundColor: 'rgba(239, 68, 68, 0.15)',
-                                color: '#f87171',
-                                border: '1px solid rgba(239, 68, 68, 0.3)',
-                                fontSize: '0.85rem',
-                                fontWeight: '700',
-                                transition: 'all 0.3s'
-                            }}
-                        >
-                            🧹 Clear Data
-                        </button>
-                        <div className="glass" style={{ padding: '10px 16px', borderRadius: '14px', fontWeight: '600', color: 'var(--text-main)', fontSize: '0.85rem' }}>
-                            🔔 <span style={{ marginLeft: '6px' }}>{newOrder ? '1 New' : '0'}</span>
-                        </div>
-                        <button
-                            onClick={() => supabase.auth.signOut()}
-                            style={{
-                                padding: '10px 16px',
-                                borderRadius: '14px',
-                                backgroundColor: 'var(--glass)',
+                                background: 'linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 100%)',
                                 color: 'var(--text-main)',
                                 border: '1px solid var(--border-subtle)',
-                                fontSize: '0.85rem',
+                                fontSize: '0.88rem',
                                 fontWeight: '700',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px',
+                                transition: 'all 0.3s'
                             }}
                         >
-                            Sign Out
+                            <span style={{ display: 'flex', gap: '2px', alignItems: 'flex-end', height: '14px' }}>
+                                <div style={{ width: '3px', height: '60%', background: '#ff4d4d', borderRadius: '1px' }}></div>
+                                <div style={{ width: '3px', height: '100%', background: '#ffcc00', borderRadius: '1px' }}></div>
+                                <div style={{ width: '3px', height: '80%', background: '#00cc66', borderRadius: '1px' }}></div>
+                            </span>
+                            Dashboard
+                        </button>
+
+                        {/* Customize Dropdown Toggle */}
+                        <div style={{ position: 'relative' }}>
+                            <button
+                                onClick={() => setShowCustomizeMenu(!showCustomizeMenu)}
+                                style={{
+                                    padding: '10px 18px',
+                                    borderRadius: '14px',
+                                    backgroundColor: showCustomizeMenu ? 'var(--accent-white)' : 'var(--glass)',
+                                    color: showCustomizeMenu ? 'var(--bg-dark)' : 'var(--text-main)',
+                                    border: '1px solid var(--border-subtle)',
+                                    fontSize: '0.88rem',
+                                    fontWeight: '700',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '8px',
+                                    transition: 'all 0.3s'
+                                }}
+                            >
+                                ⚙️ Customize
+                            </button>
+
+                            {/* Dropdown Menu */}
+                            {showCustomizeMenu && (
+                                <div className="glass animate-pop" style={{
+                                    position: 'absolute',
+                                    top: 'calc(100% + 10px)',
+                                    right: 0,
+                                    width: '240px',
+                                    padding: '12px',
+                                    borderRadius: '20px',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '8px',
+                                    zIndex: 1100,
+                                    boxShadow: 'var(--shadow-xl)'
+                                }}>
+                                    <div style={{ padding: '0 8px 8px', borderBottom: '1px solid var(--border-subtle)', marginBottom: '4px' }}>
+                                        <p style={{ fontSize: '0.75rem', fontWeight: '800', color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Management</p>
+                                    </div>
+                                    
+                                    {[
+                                        { id: 'inventory', label: '🏷️ Inventory', color: 'var(--text-main)' },
+                                        { id: 'categories', label: '📂 Categories', color: 'var(--text-main)' },
+                                        { id: 'customers', label: '👥 Customers', color: 'var(--text-main)' },
+                                        { id: 'customize', label: '🛠️ Menu/Tables', color: 'var(--text-main)' },
+                                    ].map(item => (
+                                        <button
+                                            key={item.id}
+                                            onClick={() => { setActiveTab(item.id); setShowCustomizeMenu(false); }}
+                                            className="nav-item-btn"
+                                            style={{
+                                                padding: '12px 14px',
+                                                borderRadius: '12px',
+                                                textAlign: 'left',
+                                                fontSize: '0.9rem',
+                                                backgroundColor: activeTab === item.id ? 'rgba(255,255,255,0.15)' : 'transparent',
+                                                color: item.color,
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '10px',
+                                                transition: 'all 0.2s',
+                                                width: '100%',
+                                                border: 'none'
+                                            }}
+                                        >
+                                            {item.label}
+                                        </button>
+                                    ))}
+
+                                    <div style={{ height: '1px', background: 'var(--border-subtle)', margin: '4px 0' }}></div>
+                                    
+                                    <button
+                                        onClick={() => { setShowBulkQR(true); setShowCustomizeMenu(false); }}
+                                        className="nav-item-btn"
+                                        style={{ 
+                                            padding: '12px 14px', 
+                                            borderRadius: '12px', 
+                                            textAlign: 'left', 
+                                            fontSize: '0.9rem', 
+                                            color: 'var(--text-main)', 
+                                            display: 'flex', 
+                                            alignItems: 'center', 
+                                            gap: '10px',
+                                            backgroundColor: 'transparent',
+                                            width: '100%',
+                                            border: 'none'
+                                        }}
+                                    >
+                                        🖨️ Bulk Print QR
+                                    </button>
+
+                                    <button
+                                        onClick={() => { clearAllData(); setShowCustomizeMenu(false); }}
+                                        className="nav-item-btn"
+                                        style={{ 
+                                            padding: '12px 14px', 
+                                            borderRadius: '12px', 
+                                            textAlign: 'left', 
+                                            fontSize: '0.9rem', 
+                                            color: '#f87171', 
+                                            display: 'flex', 
+                                            alignItems: 'center', 
+                                            gap: '10px',
+                                            backgroundColor: 'transparent',
+                                            width: '100%',
+                                            border: 'none'
+                                        }}
+                                    >
+                                        🧹 Clear All Data
+                                    </button>
+
+                                    <button
+                                        onClick={() => { supabase.auth.signOut(); setShowCustomizeMenu(false); }}
+                                        className="nav-item-btn"
+                                        style={{ 
+                                            padding: '12px 14px', 
+                                            borderRadius: '12px', 
+                                            textAlign: 'left', 
+                                            fontSize: '0.9rem', 
+                                            color: 'var(--text-muted)', 
+                                            display: 'flex', 
+                                            alignItems: 'center', 
+                                            gap: '10px',
+                                            backgroundColor: 'transparent',
+                                            width: '100%',
+                                            border: 'none'
+                                        }}
+                                    >
+                                        🚪 Sign Out
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Order Notification (Click to Test Sound) */}
+                        <button 
+                            className="glass" 
+                            onClick={playBeep}
+                            title="Click to test notification sound"
+                            style={{ 
+                                padding: '10px 16px', 
+                                borderRadius: '14px', 
+                                fontWeight: '600', 
+                                color: 'var(--text-main)', 
+                                fontSize: '0.88rem', 
+                                display: 'flex', 
+                                alignItems: 'center', 
+                                gap: '6px',
+                                border: '1px solid var(--border-subtle)',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s'
+                            }}
+                        >
+                            🔔 <span>{newOrder ? '1 New' : '0'}</span>
                         </button>
                     </div>
                 </header>
@@ -841,9 +1039,6 @@ const AdminPage = () => {
                         { id: 'floor', label: '🪑 Floor' },
                         { id: 'queue', label: '📋 Queue' },
                         { id: 'takeaway', label: '📦 Parcel' },
-                        { id: 'inventory', label: '🏷️ Inventory' },
-                        { id: 'categories', label: '📂 Categories' },
-                        { id: 'customers', label: '👥 Customers' },
                     ].map(t => (
                         <button
                             key={t.id}
